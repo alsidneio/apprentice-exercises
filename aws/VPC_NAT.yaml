@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "Template creates a VPC with nat gateways to allow private subnet to access the internet"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "VPC CIDR Block"
+        Parameters:
+          - VpcCIDR
+
+      - Label:
+          default: "Subnet CIDR"
+        Parameters:
+          - PublicSubnetACIDR
+          - PublicSubnetBCIDR
+          - PrivateSubnetACIDR
+          - PrivateSubnetBCIDR
+      - Label:
+          default: "SSH CIDR"
+        Parameters:
+          - SSHLocation
+
+Parameters:
+  CIDRBlock:
+    Description: Please enter the IP range for this VPC
+    Default: 10.0.0.0/16
+    Type: String
+
+  PublicSubnetACIDR:
+    Description: Please Enter the Public subnet range for Public Subnet A
+    Default: 10.0.0.0/24
+    Type: String
+
+  PublicSubnetBCIDR:
+    Description: Please Enter the Public subnet range for Public Subnet B
+    Default: 10.0.1.0/24
+    Type: String
+
+  PrivateSubnetACIDR:
+    Description: Please Enter the Public subnet range for Private Subnet A
+    Default: 10.0.2.0/24
+    Type: String
+
+  PrivateSubnetBCIDR:
+    Description: Please Enter the Public subnet range for Private Subnet B
+    Default: 10.0.3.0/24
+    Type: String
+
+  SSHLocation:
+    Description: The IP address range that can be used to access the wev server using SSH
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    Default: 0.0.0.0/0
+    MaxLength: "18"
+    MinLength: "9"
+    Type: String
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CIDRBlock
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: Apprentice-VPC
+
+  ##############
+  # Define IGW #
+  ##############
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Apprentice-IGW
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  ######################
+  # Subnet Definitions #
+  ######################
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnetACIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnetA
+      VpcId: !Ref VPC
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnetACIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSubnetA
+      VpcId: !Ref VPC
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnetBCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnetB
+      VpcId: !Ref VPC
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnetBCIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSubnetB
+      VpcId: !Ref VPC
+
+  ############################
+  # Routing Table Definition #
+  ############################
+
+  ##################
+  # Public Routing #
+  ##################
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Public Route table
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetARouteTableAttachment:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicSubnetBRouteTableAttachment:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  ###################
+  # Private Routing #
+  ###################
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Private Route Table
+      VpcId: !Ref VPC
+
+  PrivateSubnetARouteTableAttachment:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetA
+
+  PrivateSubnetBRouteTableAttachment:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetB
+
+  ################################
+  # Define NAT Gateway & Routing #
+  ################################
+
+  #Note with this configuration there is no redundancy in service
+  # all requests for both private instances are being routed through
+  # the NAT Gateway in in public subnetA because of the shared routing table
+  # TO improve redundancy, give each subnet its own routing table, pointing to a NGW
+  # within the pub subnet of its the repective AZs
+
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: Apprentice-NGW
+
+  RouteNATGatewayA:
+    DependsOn: NATGateway
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      NatGatewayId: !Ref NATGateway
+      DestinationCidrBlock: 0.0.0.0/0
+
+  ##################
+  # Security Group #
+  ##################
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH Security Group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+      Tags:
+        - Key: Name
+          Value: SSHApprenticeSG
+      VpcId: !Ref VPC
